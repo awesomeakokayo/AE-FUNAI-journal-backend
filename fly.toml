@@ -1,5 +1,5 @@
-app = "your-app-name"    # replace with your fly app name
-primary_region = "iad"   # or your preferred region
+app = "ae-funai-journal-backend"
+primary_region = "iad" 
 
 [build]
   dockerfile = "Dockerfile"
