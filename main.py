@@ -42,7 +42,9 @@ from fastapi import (
     UploadFile,
     File,
     Form,
+    Request,
 )
+import re
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -266,6 +268,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Normalize incoming paths by collapsing duplicate slashes (e.g. "//register" -> "/register").
+@app.middleware("http")
+async def normalize_path_middleware(request: Request, call_next):
+    path = request.scope.get("path", "")
+    # Replace multiple slashes with a single slash, but keep the leading slash
+    normalized = re.sub(r"/{2,}", "/", path)
+    if normalized != path:
+        request.scope["path"] = normalized
+        request.scope["raw_path"] = normalized.encode("utf-8")
+    return await call_next(request)
 
 
 # Dependency
@@ -656,7 +670,13 @@ def delete_journal(
     return {"detail": "Journal deleted"}
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Journal Platform API"}
+
+
 # Health check
 @app.get("/health")
 def health():
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
     return {"status": "ok"}
