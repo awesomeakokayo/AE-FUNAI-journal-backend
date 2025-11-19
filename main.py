@@ -41,7 +41,7 @@ from auth import authenticate_admin, create_access_token as auth_create_token, d
 app = FastAPI(title="Journal Platform API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["ALLOWED_ORIGINS","https://aefunai.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
