@@ -41,13 +41,6 @@ from auth import authenticate_admin, create_access_token as auth_create_token, d
 
 # FastAPI app
 app = FastAPI(title="Journal Platform API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["ALLOWED_ORIGINS","https://aefunai.netlify.app"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Configuration 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +57,15 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 
 ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", "https://aefunai.netlify.app")
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 
+# Add CORS middleware AFTER ALLOWED_ORIGINS is defined
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Email configuration (set via environment variables)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -72,7 +74,17 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "awesomeakokayo@gmail.com")
 
 # Database setup 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is required")
+
+# Handle both SQLite and PostgreSQL
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    # PostgreSQL or other databases
+    engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
