@@ -1,3 +1,5 @@
+ALLOWED_ORIGINS="https://aefunai.netlify.app"
+
 import os
 import uuid
 import smtplib
