@@ -37,6 +37,16 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt  # Use python-jose to match auth.py
 from auth import authenticate_admin, create_access_token as auth_create_token, decode_token as auth_decode_token
 
+# FastAPI app
+app = FastAPI(title="Journal Platform API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Configuration 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -234,17 +244,6 @@ class JournalOut(BaseModel):
 
     class Config:
         orm_mode = True
-
-
-# FastAPI app
-app = FastAPI(title="Journal Platform API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")
