@@ -1,29 +1,3 @@
-"""
-FastAPI backend for a simplified Journal Publication and Reading Platform.
-Features:
-- User registration and login (JWT auth)
-- Journal submission for review (sends to email)
-- Admin-only journal upload to public site
-- List journals, download PDFs, view metadata
-- Admin management of submissions
-
-Single-file app for demo / student project. Uses SQLite + SQLAlchemy.
-Run with: uvicorn main:app --reload
-
-Requirements (pip):
-fastapi
-uvicorn[standard]
-SQLAlchemy
-pydantic[email]
-python-multipart
-passlib[bcrypt]
-PyJWT
-python-dotenv
-aiosmtplib  # for async email sending
-
-Make sure the `uploads/` and `submissions/` directories exist or the app will create them on start.
-"""
-
 import os
 import uuid
 import smtplib
@@ -74,6 +48,9 @@ DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+
+ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", "https://aefunai.netlify.app")
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 
 # Email configuration (set via environment variables)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
@@ -263,14 +240,13 @@ class JournalOut(BaseModel):
 app = FastAPI(title="Journal Platform API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Normalize incoming paths by collapsing duplicate slashes (e.g. "//register" -> "/register").
 @app.middleware("http")
 async def normalize_path_middleware(request: Request, call_next):
     path = request.scope.get("path", "")
@@ -349,7 +325,7 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         full_name=user_in.full_name,
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
-        is_admin=0,  # Regular users are not admins by default
+        is_admin=0,
     )
     db.add(user)
     db.commit()
