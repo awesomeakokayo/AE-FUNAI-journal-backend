@@ -2,8 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install build dependencies required by some cryptography/bcrypt wheels
+# and common system libraries needed by Python packages.
 RUN apt-get update && apt-get install -y \
+    build-essential \
     gcc \
+    python3-dev \
+    libffi-dev \
+    libssl-dev \
     libpq-dev \
     libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*

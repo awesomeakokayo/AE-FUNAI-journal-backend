@@ -17,7 +17,30 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH")  # pre-hashed for "adminpass"
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    # Protect against missing/invalid stored hash and bcrypt limitations.
+    if not hashed_password:
+        return False
+
+    # Bcrypt has a 72 byte input limit; reject overly long passwords early
+    try:
+        if isinstance(plain_password, str) and len(plain_password.encode("utf-8")) > 72:
+            # Do not attempt to verify very long passwords (would raise ValueError in bcrypt)
+            return False
+    except Exception:
+        # If encoding fails for some reason, fall back to verification attempt below
+        pass
+
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (ValueError, AttributeError, TypeError) as e:
+        # These commonly happen when the bcrypt backend isn't available or input is invalid.
+        # Log for debugging and return False so callers treat it as authentication failure
+        print(f"Password verification error: {e}")
+        return False
+    except Exception as e:
+        # Catch-all to avoid leaking server errors as 500s during auth attempts
+        print(f"Unexpected password verification error: {e}")
+        return False
 
 def get_password_hash(password):
     return pwd_context.hash(password)
