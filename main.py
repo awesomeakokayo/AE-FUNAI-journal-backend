@@ -44,8 +44,8 @@ SUBMISSIONS_DIR = os.path.join(BASE_DIR, "submissions")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 
-DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
-SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+SECRET_KEY = os.environ.get("SECRET_KEY")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
@@ -57,7 +57,7 @@ SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "research@funai.edu.ng")
+REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "awesomeakokayo@gmail.com")
 
 # Database setup 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -88,7 +88,7 @@ class Submission(Base):
     original_filename = Column(String(255))
     submitted_by = Column(Integer, ForeignKey("users.id"))
     submitted_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String(50), default="pending")  # pending, approved, rejected
+    status = Column(String(50), default="pending")
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     
@@ -105,7 +105,7 @@ class Journal(Base):
     original_filename = Column(String(255))
     uploaded_by = Column(Integer, ForeignKey("users.id"))
     upload_date = Column(DateTime, default=datetime.utcnow)
-    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)  # Link to original submission
+    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)
 
     owner = relationship("User", back_populates="journals")
 
