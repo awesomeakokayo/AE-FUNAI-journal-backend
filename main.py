@@ -141,11 +141,36 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def get_password_hash(password: str) -> str:
+    # Bcrypt has a 72-byte limit; truncate if necessary
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+        password = password_bytes.decode('utf-8', errors='ignore')
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    # Bcrypt has a 72-byte limit; truncate if necessary for verification
+    if not hashed_password:
+        return False
+    
+    # Bcrypt has a 72 byte input limit; reject overly long passwords early
+    try:
+        if isinstance(plain_password, str) and len(plain_password.encode("utf-8")) > 72:
+            # Truncate to 72 bytes for verification
+            password_bytes = plain_password.encode("utf-8")[:72]
+            plain_password = password_bytes.decode('utf-8', errors='ignore')
+    except Exception:
+        pass
+    
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (ValueError, AttributeError, TypeError) as e:
+        print(f"Password verification error: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected password verification error: {e}")
+        return False
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
