@@ -99,7 +99,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     journals = relationship("Journal", back_populates="owner")
-    submissions = relationship("Submission", back_populates="submitter")
+    submissions = relationship("Submission", primaryjoin="User.id == Submission.submitted_by", back_populates="submitter")
 
 
 class Submission(Base):
