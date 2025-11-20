@@ -127,7 +127,7 @@ class Journal(Base):
     abstract = Column(Text)
     file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
-    uploaded_by = Column(Integer, ForeignKey("users.id"))
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)
 
@@ -605,17 +605,21 @@ def admin_upload_journal(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if submission:
             submission.status = "approved"
-            submission.reviewed_by = admin_user.id
+            # Only set reviewed_by if admin_user has a valid database ID (not 0 for auth.py admin)
+            if admin_user.id != 0:
+                submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
     
     # Save journal record
+    # Use None for uploaded_by if admin_user.id is 0 (auth.py admin, not in database)
+    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
         abstract=abstract,
         file_path=dest_path,
         original_filename=file.filename,
-        uploaded_by=admin_user.id,
+        uploaded_by=uploaded_by_id,
         submission_id=submission_id,
     )
     db.add(journal)
