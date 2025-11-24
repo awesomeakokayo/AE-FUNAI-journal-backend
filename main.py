@@ -1,5 +1,3 @@
-ALLOWED_ORIGINS="https://aefunai.netlify.app"
-
 import os
 import uuid
 import smtplib
@@ -18,9 +16,7 @@ from fastapi import (
     UploadFile,
     File,
     Form,
-    Request,
 )
-import re
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -39,9 +35,6 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt  # Use python-jose to match auth.py
 from auth import authenticate_admin, create_access_token as auth_create_token, decode_token as auth_decode_token
 
-# FastAPI app
-app = FastAPI(title="Journal Platform API")
-
 # Configuration 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -49,42 +42,20 @@ SUBMISSIONS_DIR = os.path.join(BASE_DIR, "submissions")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-SECRET_KEY = os.environ.get("SECRET_KEY")
+DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
+SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-
-ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", "https://aefunai.netlify.app")
-ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
-
-# Add CORS middleware AFTER ALLOWED_ORIGINS is defined
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Email configuration (set via environment variables)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "awesomeakokayo@gmail.com")
+REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "research@funai.edu.ng")
 
 # Database setup 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is required")
-if not SECRET_KEY:
-    raise ValueError("SECRET_KEY environment variable is required")
-
-# Handle both SQLite and PostgreSQL
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-else:
-    # PostgreSQL or other databases
-    engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -96,10 +67,13 @@ class User(Base):
     email = Column(String(200), unique=True, index=True, nullable=False)
     hashed_password = Column(String(200), nullable=False)
     is_admin = Column(Integer, default=0)  # 0 or 1
+    email_verified = Column(Integer, default=0)  # 0 or 1
+    verification_token = Column(String(255), nullable=True, index=True)
+    verification_token_expires = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     journals = relationship("Journal", back_populates="owner")
-    submissions = relationship("Submission", primaryjoin="User.id == Submission.submitted_by", back_populates="submitter")
+    submissions = relationship("Submission", back_populates="submitter")
 
 
 class Submission(Base):
@@ -112,7 +86,7 @@ class Submission(Base):
     original_filename = Column(String(255))
     submitted_by = Column(Integer, ForeignKey("users.id"))
     submitted_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String(50), default="pending")
+    status = Column(String(50), default="pending")  # pending, approved, rejected
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     
@@ -127,9 +101,12 @@ class Journal(Base):
     abstract = Column(Text)
     file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
-    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id"))
     upload_date = Column(DateTime, default=datetime.utcnow)
-    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)
+    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)  # Link to original submission
+    category = Column(String(100), nullable=True)  # For categorizing journals
+    published = Column(Integer, default=1)  # 0 or 1
+    published_date = Column(DateTime, nullable=True)  # When it was published
 
     owner = relationship("User", back_populates="journals")
 
@@ -141,36 +118,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def get_password_hash(password: str) -> str:
-    # Bcrypt has a 72-byte limit; truncate if necessary
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > 72:
-        password_bytes = password_bytes[:72]
-        password = password_bytes.decode('utf-8', errors='ignore')
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # Bcrypt has a 72-byte limit; truncate if necessary for verification
-    if not hashed_password:
-        return False
-    
-    # Bcrypt has a 72 byte input limit; reject overly long passwords early
-    try:
-        if isinstance(plain_password, str) and len(plain_password.encode("utf-8")) > 72:
-            # Truncate to 72 bytes for verification
-            password_bytes = plain_password.encode("utf-8")[:72]
-            plain_password = password_bytes.decode('utf-8', errors='ignore')
-    except Exception:
-        pass
-    
-    try:
-        return pwd_context.verify(plain_password, hashed_password)
-    except (ValueError, AttributeError, TypeError) as e:
-        print(f"Password verification error: {e}")
-        return False
-    except Exception as e:
-        print(f"Unexpected password verification error: {e}")
-        return False
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -234,6 +186,51 @@ def send_email_with_attachment(
         return False
 
 
+def send_verification_email(to_email: str, verification_token: str, base_url: str = "http://localhost:8000") -> bool:
+    """Send email verification email. Returns True if successful."""
+    verification_url = f"{base_url}/verify-email?token={verification_token}"
+    
+    subject = "Verify Your Email - AE-FUNAI Journal Platform"
+    body = f"""
+Hello,
+
+Thank you for registering with the AE-FUNAI Journal Platform.
+
+Please verify your email address by clicking the link below:
+{verification_url}
+
+This link will expire in 24 hours.
+
+If you did not create an account, please ignore this email.
+
+Best regards,
+AE-FUNAI Journal Platform Team
+"""
+    
+    if not SMTP_USER or not SMTP_PASSWORD:
+        # In development, just log instead of sending
+        print(f"[EMAIL] Verification email to {to_email}")
+        print(f"[EMAIL] Verification URL: {verification_url}")
+        return True
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Verification email sending failed: {e}")
+        return False
+
+
 # Pydantic Schemas
 class Token(BaseModel):
     access_token: str
@@ -251,6 +248,7 @@ class UserOut(BaseModel):
     full_name: str
     email: EmailStr
     is_admin: int
+    email_verified: Optional[int] = 0
 
     class Config:
         orm_mode = True
@@ -280,20 +278,23 @@ class JournalOut(BaseModel):
     original_filename: Optional[str]
     upload_date: datetime
     uploaded_by: int
+    category: Optional[str] = None
+    published: Optional[int] = 1
+    published_date: Optional[datetime] = None
 
     class Config:
         orm_mode = True
 
 
-@app.middleware("http")
-async def normalize_path_middleware(request: Request, call_next):
-    path = request.scope.get("path", "")
-    # Replace multiple slashes with a single slash, but keep the leading slash
-    normalized = re.sub(r"/{2,}", "/", path)
-    if normalized != path:
-        request.scope["path"] = normalized
-        request.scope["raw_path"] = normalized.encode("utf-8")
-    return await call_next(request)
+# FastAPI app
+app = FastAPI(title="Journal Platform API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # change for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Dependency
@@ -359,16 +360,48 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == user_in.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Generate verification token
+    verification_token = uuid.uuid4().hex
+    token_expires = datetime.utcnow() + timedelta(hours=24)
+    
     user = User(
         full_name=user_in.full_name,
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
-        is_admin=0,
+        is_admin=0,  # Regular users are not admins by default
+        email_verified=0,  # Not verified initially
+        verification_token=verification_token,
+        verification_token_expires=token_expires,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+    
+    # Send verification email
+    base_url = os.environ.get("BASE_URL", "http://localhost:8000")
+    send_verification_email(user.email, verification_token, base_url)
+    
     return user
+
+
+@app.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    """Verify user email with token."""
+    user = db.query(User).filter(
+        User.verification_token == token,
+        User.verification_token_expires > datetime.utcnow()
+    ).first()
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+    
+    user.email_verified = 1
+    user.verification_token = None
+    user.verification_token_expires = None
+    db.commit()
+    
+    return {"message": "Email verified successfully"}
 
 
 @app.post("/login", response_model=Token)
@@ -578,6 +611,7 @@ def admin_upload_journal(
     abstract: Optional[str] = Form(None),
     file: UploadFile = File(...),
     submission_id: Optional[int] = Form(None),
+    category: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     admin_user: User = Depends(require_admin),
 ):
@@ -605,22 +639,21 @@ def admin_upload_journal(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if submission:
             submission.status = "approved"
-            # Only set reviewed_by if admin_user has a valid database ID (not 0 for auth.py admin)
-            if admin_user.id != 0:
-                submission.reviewed_by = admin_user.id
+            submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
     
     # Save journal record
-    # Use None for uploaded_by if admin_user.id is 0 (auth.py admin, not in database)
-    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
         abstract=abstract,
         file_path=dest_path,
         original_filename=file.filename,
-        uploaded_by=uploaded_by_id,
+        uploaded_by=admin_user.id,
         submission_id=submission_id,
+        category=category,
+        published=1,
+        published_date=datetime.utcnow(),
     )
     db.add(journal)
     db.commit()
@@ -629,16 +662,105 @@ def admin_upload_journal(
     return journal
 
 
+@app.post("/admin/submissions/{submission_id}/approve-publish")
+def approve_and_publish_submission(
+    submission_id: int,
+    title: Optional[str] = Form(None),
+    authors: Optional[str] = Form(None),
+    abstract: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    """Approve a submission and publish it directly (admin only)."""
+    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    # Use submission data if not provided
+    final_title = title or submission.title
+    final_authors = authors or submission.authors
+    final_abstract = abstract or submission.abstract
+    
+    # If file is provided, use it; otherwise convert submission file to PDF if needed
+    if file:
+        if file.content_type not in ALLOWED_JOURNAL_TYPES:
+            raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+        unique_name = f"{uuid.uuid4().hex}.pdf"
+        dest_path = os.path.join(UPLOAD_DIR, unique_name)
+        
+        total = 0
+        with open(dest_path, "wb") as buffer:
+            for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > MAX_FILE_SIZE_BYTES:
+                    buffer.close()
+                    os.remove(dest_path)
+                    raise HTTPException(status_code=400, detail="File too large")
+                buffer.write(chunk)
+        original_filename = file.filename
+    else:
+        # Use submission file (assuming it's already PDF or will be converted)
+        # For now, copy the submission file
+        file_ext = os.path.splitext(submission.original_filename)[1] or ".pdf"
+        unique_name = f"{uuid.uuid4().hex}{file_ext}"
+        dest_path = os.path.join(UPLOAD_DIR, unique_name)
+        
+        import shutil
+        shutil.copy2(submission.file_path, dest_path)
+        original_filename = submission.original_filename or f"journal_{submission_id}.pdf"
+    
+    # Update submission status
+    submission.status = "approved"
+    submission.reviewed_by = admin_user.id
+    submission.reviewed_at = datetime.utcnow()
+    
+    # Create journal record
+    journal = Journal(
+        title=final_title,
+        authors=final_authors,
+        abstract=final_abstract,
+        file_path=dest_path,
+        original_filename=original_filename,
+        uploaded_by=admin_user.id,
+        submission_id=submission_id,
+        category=category,
+        published=1,
+        published_date=datetime.utcnow(),
+    )
+    db.add(journal)
+    db.commit()
+    db.refresh(journal)
+    
+    return {
+        "message": "Submission approved and published successfully",
+        "journal": journal
+    }
+
+
 # Routes: Public Journals
 @app.get("/journals", response_model=List[JournalOut])
-def list_journals(q: Optional[str] = None, db: Session = Depends(get_db)):
+def list_journals(q: Optional[str] = None, category: Optional[str] = None, db: Session = Depends(get_db)):
     """List all published journals (public)."""
-    query = db.query(Journal)
+    query = db.query(Journal).filter(Journal.published == 1)
     if q:
         q_term = f"%{q}%"
         query = query.filter((Journal.title.ilike(q_term)) | (Journal.authors.ilike(q_term)))
+    if category:
+        query = query.filter(Journal.category == category)
     journals = query.order_by(Journal.upload_date.desc()).all()
     return journals
+
+
+@app.get("/journals/categories")
+def list_categories(db: Session = Depends(get_db)):
+    """Get list of all journal categories."""
+    categories = db.query(Journal.category).filter(
+        Journal.published == 1,
+        Journal.category.isnot(None)
+    ).distinct().all()
+    return [cat[0] for cat in categories if cat[0]]
 
 
 @app.get("/journals/{journal_id}", response_model=JournalOut)
@@ -658,10 +780,19 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Journal not found")
     if not os.path.exists(journal.file_path):
         raise HTTPException(status_code=404, detail="File not found on server")
+    
+    # Ensure proper filename with .pdf extension
+    filename = journal.original_filename or f"journal_{journal_id}.pdf"
+    if not filename.lower().endswith('.pdf'):
+        filename = f"{filename}.pdf"
+    
     return FileResponse(
         path=journal.file_path,
-        filename=journal.original_filename,
-        media_type="application/pdf"
+        filename=filename,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
     )
 
 
@@ -688,13 +819,7 @@ def delete_journal(
     return {"detail": "Journal deleted"}
 
 
-@app.get("/")
-def root():
-    return {"status": "ok", "message": "Journal Platform API"}
-
-
 # Health check
 @app.get("/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
     return {"status": "ok"}
