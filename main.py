@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from passlib.context import CryptContext
-from jose import JWTError, jwt  # Use python-jose to match auth.py
+from jose import JWTError, jwt 
 from auth import authenticate_admin, create_access_token as auth_create_token, decode_token as auth_decode_token
 
 # Configuration 
@@ -290,7 +290,7 @@ class JournalOut(BaseModel):
 app = FastAPI(title="Journal Platform API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # change for production
+    allow_origins=["https://aefunai.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -326,10 +326,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 def require_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Dependency to require admin access. Handles both database admin users and auth.py admin."""
     try:
-        # First try to decode with auth.py (for admin tokens)
         payload = auth_decode_token(token)
         if payload and payload.get("admin") is True:
-            # Return a mock admin user object for auth.py admin
             class AdminUser:
                 id = 0
                 is_admin = 1
