@@ -42,7 +42,7 @@ SUBMISSIONS_DIR = os.path.join(BASE_DIR, "submissions")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
@@ -62,7 +62,10 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 REVIEW_EMAIL = os.environ.get("REVIEW_EMAIL", "research@funai.edu.ng")
 
 # Database setup 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
