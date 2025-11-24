@@ -732,13 +732,32 @@ def approve_and_publish_submission(
         original_filename = file.filename
     else:
         # Use submission file (assuming it's already PDF or will be converted)
-        # For now, copy the submission file
-        file_ext = os.path.splitext(submission.original_filename)[1] or ".pdf"
+        # Check if submission file exists
+        if not os.path.exists(submission.file_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Submission file not found. Please upload a new file or contact support. File path: {submission.file_path}"
+            )
+        
+        # Copy the submission file
+        file_ext = os.path.splitext(submission.original_filename)[1] if submission.original_filename else ".pdf"
         unique_name = f"{uuid.uuid4().hex}{file_ext}"
         dest_path = os.path.join(UPLOAD_DIR, unique_name)
         
         import shutil
-        shutil.copy2(submission.file_path, dest_path)
+        try:
+            shutil.copy2(submission.file_path, dest_path)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Submission file not found at path: {submission.file_path}. Please upload a new file."
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error copying submission file: {str(e)}"
+            )
+        
         original_filename = submission.original_filename or f"journal_{submission_id}.pdf"
     
     # Update submission status
