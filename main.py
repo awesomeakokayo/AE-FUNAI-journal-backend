@@ -129,7 +129,7 @@ class Journal(Base):
     abstract = Column(Text)
     file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
-    uploaded_by = Column(Integer, ForeignKey("users.id"))
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)  # Link to original submission
     category = Column(String(100), nullable=True)  # For categorizing journals
@@ -667,17 +667,19 @@ def admin_upload_journal(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if submission:
             submission.status = "approved"
-            submission.reviewed_by = admin_user.id
+            if admin_user.id != 0:
+                submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
     
     # Save journal record
+    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
         abstract=abstract,
         file_path=dest_path,
         original_filename=file.filename,
-        uploaded_by=admin_user.id,
+        uploaded_by=uploaded_by_id,
         submission_id=submission_id,
         category=category,
         published=1,
@@ -741,17 +743,19 @@ def approve_and_publish_submission(
     
     # Update submission status
     submission.status = "approved"
-    submission.reviewed_by = admin_user.id
+    if admin_user.id != 0:
+        submission.reviewed_by = admin_user.id
     submission.reviewed_at = datetime.utcnow()
     
     # Create journal record
+    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
     journal = Journal(
         title=final_title,
         authors=final_authors,
         abstract=final_abstract,
         file_path=dest_path,
         original_filename=original_filename,
-        uploaded_by=admin_user.id,
+        uploaded_by=uploaded_by_id,
         submission_id=submission_id,
         category=category,
         published=1,
