@@ -42,7 +42,7 @@ SUBMISSIONS_DIR = os.path.join(BASE_DIR, "submissions")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 
-DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
