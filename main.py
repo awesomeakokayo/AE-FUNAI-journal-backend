@@ -47,6 +47,13 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret-in-prod")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
+ALLOWED_ORIGINS_ENV = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "https://aefunai.netlify.app,https://www.aefunai.netlify.app,http://localhost:5173,http://localhost:3000",
+)
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
+ALLOW_ALL_ORIGINS = "*" in ALLOWED_ORIGINS
+
 # Email configuration (set via environment variables)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -288,10 +295,12 @@ class JournalOut(BaseModel):
 
 # FastAPI app
 app = FastAPI(title="Journal Platform API")
+cors_allow_credentials = not ALLOW_ALL_ORIGINS
+cors_allow_origins = ["*"] if ALLOW_ALL_ORIGINS else ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aefunai.netlify.app"],
-    allow_credentials=True,
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
