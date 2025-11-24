@@ -80,7 +80,16 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     journals = relationship("Journal", back_populates="owner")
-    submissions = relationship("Submission", back_populates="submitter")
+    submissions = relationship(
+        "Submission",
+        foreign_keys="Submission.submitted_by",
+        back_populates="submitter",
+    )
+    reviews = relationship(
+        "Submission",
+        foreign_keys="Submission.reviewed_by",
+        back_populates="reviewer",
+    )
 
 
 class Submission(Base):
@@ -97,7 +106,16 @@ class Submission(Base):
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     
-    submitter = relationship("User", foreign_keys=[submitted_by], back_populates="submissions")
+    submitter = relationship(
+        "User",
+        foreign_keys=[submitted_by],
+        back_populates="submissions",
+    )
+    reviewer = relationship(
+        "User",
+        foreign_keys=[reviewed_by],
+        back_populates="reviews",
+    )
 
 
 class Journal(Base):
