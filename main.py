@@ -64,7 +64,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Length"],
 )
+
 
 # Email configuration (set via environment variables)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
@@ -552,18 +554,20 @@ def download_submission(
     db: Session = Depends(get_db),
     admin_user: User = Depends(require_admin),
 ):
-    """Download a submission file (admin only)."""
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
-    
+
     if not os.path.exists(submission.file_path):
         raise HTTPException(status_code=404, detail="File not found")
-    
+
+    filename = submission.original_filename or "download"
+    # choose mime
+    mime = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
     return FileResponse(
         path=submission.file_path,
-        filename=submission.original_filename,
-        media_type="application/octet-stream"
+        filename=filename,
+        media_type=mime
     )
 
 
