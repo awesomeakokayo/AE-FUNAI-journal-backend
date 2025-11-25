@@ -3,6 +3,7 @@ ALLOWED_ORIGINS="https://aefunai.netlify.app"
 import os
 import uuid
 import smtplib
+import shutil
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -626,6 +627,56 @@ def admin_upload_journal(
     db.commit()
     db.refresh(journal)
     
+    return journal
+
+
+import shutil
+from fastapi import Form
+
+@app.post("/admin/submissions/{submission_id}/approve-publish", response_model=JournalOut)
+def approve_and_publish_submission(
+    submission_id: int,
+    category: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    submission = db.query(Submission).filter(Submission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    if not os.path.exists(submission.file_path):
+        raise HTTPException(status_code=404, detail="Submission file not found on server")
+
+    # Create a new unique filename in UPLOAD_DIR
+    ext = os.path.splitext(submission.original_filename or "")[1] or ".pdf"
+    dest_name = f"{uuid.uuid4().hex}{ext}"
+    dest_path = os.path.join(UPLOAD_DIR, dest_name)
+
+    try:
+        # Move file from submissions to uploads (preserves file)
+        shutil.move(submission.file_path, dest_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move file: {e}")
+
+    # Mark submission approved
+    submission.status = "approved"
+    submission.reviewed_by = admin_user.id if getattr(admin_user, "id", None) else None
+    submission.reviewed_at = datetime.utcnow()
+
+    # Create Journal record using the moved file
+    journal = Journal(
+        title=submission.title,
+        authors=submission.authors,
+        abstract=submission.abstract,
+        file_path=dest_path,
+        original_filename=submission.original_filename,
+        uploaded_by=admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None,
+        submission_id=submission.id,
+    )
+    db.add(journal)
+    db.commit()
+    db.refresh(journal)
+
     return journal
 
 
