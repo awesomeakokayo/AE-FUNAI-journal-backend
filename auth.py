@@ -20,7 +20,6 @@ def verify_password(plain_password, hashed_password):
     try:
         return pwd_context.verify(plain_password, hashed_password)
     except Exception as e:
-        # If bcrypt backend is not available or the hash is invalid, return False
         print(f"verify_password error: {e}")
         return False
 
@@ -40,7 +39,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def authenticate_admin(username: str, password: str) -> bool:
     if username != ADMIN_USERNAME:
         return False
-    # Prefer verifying against a stored hash, but fall back to plaintext ADMIN_PASSWORD
     if ADMIN_PASSWORD_HASH:
         try:
             if verify_password(password, ADMIN_PASSWORD_HASH):

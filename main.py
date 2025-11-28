@@ -38,7 +38,12 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from passlib.context import CryptContext
 from jose import JWTError, jwt  # Use python-jose to match auth.py
-from auth import authenticate_admin, create_access_token as auth_create_token, decode_token as auth_decode_token
+from auth import (
+    authenticate_admin,
+    create_access_token as auth_create_token,
+    decode_token as auth_decode_token,
+    ADMIN_USERNAME,
+)
 
 # FastAPI app
 app = FastAPI(title="Journal Platform API")
@@ -348,44 +353,28 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
-def require_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    """Dependency to require admin access. Handles both database admin users and auth.py admin."""
-    # First try to decode with auth.py (for env-based admin tokens)
+def require_admin(token: str = Depends(oauth2_scheme)):
+    """Verify token belongs to the admin user defined in .env."""
     try:
         payload = auth_decode_token(token)
-        if payload and payload.get("admin") is True:
-            # Valid env-based admin token; return a simple admin object
-            class AdminUser:
-                id = 0
-                is_admin = 1
-                full_name = "Admin"
-                email = "admin@admin"
-            return AdminUser()
     except Exception:
-        # auth_decode_token failed or token is not admin format; continue to try user token
-        pass
-    
-    # Try to decode with main.py's jwt (for database users with is_admin=1)
-    try:
-        payload = decode_access_token(token)
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        try:
-            uid = int(user_id)
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=401, detail="Invalid user id in token")
-        
-        user = db.query(User).filter(User.id == uid).first()
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail="Admin access required")
-        return user
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if not payload.get("admin"):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    username_in_token = payload.get("sub")
+    if username_in_token != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+
+    class AdminUser:
+        id = 0
+        is_admin = True
+        username = ADMIN_USERNAME
+        full_name = "Admin"
+        email = "admin@local"
+
+    return AdminUser()
 
 
 # Routes: Auth
@@ -422,7 +411,7 @@ def admin_login(form_data: OAuth2PasswordRequestForm = Depends()):
         raise HTTPException(status_code=401, detail="Incorrect admin username or password")
     
     # Create token with admin identifier (env-based admin)
-    access_token = auth_create_token({"sub": "admin", "admin": True})
+    access_token = auth_create_token({"sub": ADMIN_USERNAME, "admin": True})
     return {"access_token": access_token, "token_type": "bearer"}
 
 
