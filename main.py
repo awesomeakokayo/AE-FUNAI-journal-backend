@@ -315,31 +315,27 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    # First, disallow using the "admin" token on user endpoints
-    try:
-        admin_payload = auth_decode_token(token)
-        if admin_payload and admin_payload.get("admin") is True:
-            # Admin tokens are only for admin routes; reject here
-            raise HTTPException(status_code=401, detail="Admin token not allowed for user endpoints")
-    except Exception:
-        # auth_decode_token may raise for non-admin tokens — ignore those errors
-        pass
-
-    # Now decode the normal user token
     payload = decode_access_token(token)
     user_id = payload.get("sub")
+
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Ensure the 'sub' can be interpreted as an int (guard against "admin")
-    try:
-        uid = int(user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=401, detail="Invalid user id in token")
+    # HANDLE ADMIN TOKEN (ENV-BASED LOGIN)
+    if user_id == os.getenv("ADMIN_USERNAME"):
+        return {
+            "id": 0,
+            "full_name": "Admin",
+            "email": "admin",
+            "is_admin": True
+        }
 
-    user = db.query(User).filter(User.id == uid).first()
+    # Normal User Flow
+    user = db.query(User).filter(User.id == int(user_id)).first()
+
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
     return user
 
 
