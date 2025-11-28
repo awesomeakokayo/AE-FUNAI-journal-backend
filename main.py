@@ -58,6 +58,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 
 ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", "https://aefunai.netlify.app")
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 
+# File size limit
+MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
+
 # Add CORS middleware AFTER ALLOWED_ORIGINS is defined
 app.add_middleware(
     CORSMiddleware,
@@ -130,7 +133,7 @@ class Journal(Base):
     abstract = Column(Text)
     file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
-    uploaded_by = Column(Integer, ForeignKey("users.id"))
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)
 
@@ -282,8 +285,7 @@ class JournalOut(BaseModel):
     abstract: Optional[str]
     original_filename: Optional[str]
     upload_date: datetime
-    uploaded_by: int
-
+    uploaded_by: Optional[int]  # allow None for env-admin
     class Config:
         orm_mode = True
 
@@ -315,37 +317,44 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    """
+    Decode a regular user token and return the DB user.
+    Admin tokens (env-based) are rejected here to avoid admins being treated as normal users.
+    """
+    # If token is an env-based admin token, reject for user endpoints
+    try:
+        admin_payload = auth_decode_token(token)
+        if admin_payload and admin_payload.get("admin") is True:
+            raise HTTPException(status_code=401, detail="Admin token not allowed for user endpoints")
+    except Exception:
+        # auth_decode_token may raise for non-admin tokens — ignore those errors
+        pass
+
     payload = decode_access_token(token)
     user_id = payload.get("sub")
 
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # HANDLE ADMIN TOKEN (ENV-BASED LOGIN)
-    if user_id == os.getenv("ADMIN_USERNAME"):
-        return {
-            "id": 0,
-            "full_name": "Admin",
-            "email": "admin",
-            "is_admin": True
-        }
+    # Must be integer user id
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid user id in token")
 
-    # Normal User Flow
-    user = db.query(User).filter(User.id == int(user_id)).first()
-
+    user = db.query(User).filter(User.id == uid).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-
     return user
 
 
 def require_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Dependency to require admin access. Handles both database admin users and auth.py admin."""
-    # First try to decode with auth.py (for admin tokens from /admin/login)
+    # First try to decode with auth.py (for env-based admin tokens)
     try:
         payload = auth_decode_token(token)
         if payload and payload.get("admin") is True:
-            # Valid admin token; return admin user
+            # Valid env-based admin token; return a simple admin object
             class AdminUser:
                 id = 0
                 is_admin = 1
@@ -412,8 +421,7 @@ def admin_login(form_data: OAuth2PasswordRequestForm = Depends()):
     if not authenticate_admin(form_data.username, form_data.password):
         raise HTTPException(status_code=401, detail="Incorrect admin username or password")
     
-    # Create token with admin identifier
-    # We'll use a special format to identify admin tokens
+    # Create token with admin identifier (env-based admin)
     access_token = auth_create_token({"sub": "admin", "admin": True})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -424,7 +432,6 @@ def read_users_me(current_user: User = Depends(get_current_user)):
 
 
 # Routes: Submissions (for regular users)
-MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024
 ALLOWED_SUBMISSION_TYPES = [
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -521,6 +528,7 @@ def my_submissions(
     
     result = []
     for sub in submissions:
+        submitter = db.query(User).filter(User.id == sub.submitted_by).first()
         sub_dict = {
             "id": sub.id,
             "title": sub.title,
@@ -530,8 +538,8 @@ def my_submissions(
             "submitted_at": sub.submitted_at,
             "submitted_by": sub.submitted_by,
             "status": sub.status,
-            "submitter_name": current_user.full_name,
-            "submitter_email": current_user.email,
+            "submitter_name": submitter.full_name if submitter else None,
+            "submitter_email": submitter.email if submitter else None,
         }
         result.append(sub_dict)
     
@@ -633,14 +641,13 @@ def admin_upload_journal(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if submission:
             submission.status = "approved"
-            # Only set reviewed_by if admin_user.id is not 0 (i.e., not the mock admin user)
-            if admin_user.id != 0:
+            # Only set reviewed_by if admin_user.id is not 0 (i.e., not the mock env-admin user)
+            if getattr(admin_user, "id", None) and admin_user.id != 0:
                 submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
     
     # Save journal record
-    # For admin tokens (id=0), set uploaded_by to None; for database admins (id > 0), use their id
-    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
+    uploaded_by_id = admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
@@ -656,9 +663,6 @@ def admin_upload_journal(
     
     return journal
 
-
-import shutil
-from fastapi import Form
 
 @app.post("/admin/submissions/{submission_id}/approve-publish", response_model=JournalOut)
 def approve_and_publish_submission(
@@ -687,7 +691,7 @@ def approve_and_publish_submission(
 
     # Mark submission approved
     submission.status = "approved"
-    submission.reviewed_by = admin_user.id if getattr(admin_user, "id", None) else None
+    submission.reviewed_by = admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None
     submission.reviewed_at = datetime.utcnow()
 
     # Create Journal record using the moved file
@@ -775,4 +779,3 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
-    return {"status": "ok"}
