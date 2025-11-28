@@ -17,7 +17,12 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH")  # pre-hashed for "adminpass"
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        # If bcrypt backend is not available or the hash is invalid, return False
+        print(f"verify_password error: {e}")
+        return False
 
 def get_password_hash(password):
     return pwd_context.hash(password)
@@ -35,7 +40,20 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def authenticate_admin(username: str, password: str) -> bool:
     if username != ADMIN_USERNAME:
         return False
-    return verify_password(password, ADMIN_PASSWORD_HASH)
+    # Prefer verifying against a stored hash, but fall back to plaintext ADMIN_PASSWORD
+    if ADMIN_PASSWORD_HASH:
+        try:
+            if verify_password(password, ADMIN_PASSWORD_HASH):
+                return True
+        except Exception:
+            pass
+
+    # Fallback: plain-text admin password (useful when bcrypt isn't available in the runtime)
+    raw = os.getenv("ADMIN_PASSWORD")
+    if raw and password == raw:
+        return True
+
+    return False
 
 def decode_token(token: str):
     try:
