@@ -345,24 +345,33 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 def require_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Dependency to require admin access. Handles both database admin users and auth.py admin."""
+    # First try to decode with auth.py (for admin tokens from /admin/login)
     try:
-        # First try to decode with auth.py (for admin tokens)
         payload = auth_decode_token(token)
         if payload and payload.get("admin") is True:
-            # Return a mock admin user object for auth.py admin
+            # Valid admin token; return admin user
             class AdminUser:
                 id = 0
                 is_admin = 1
                 full_name = "Admin"
                 email = "admin@admin"
             return AdminUser()
-        
-        # Otherwise, try to decode with main.py's jwt (for database users)
+    except Exception:
+        # auth_decode_token failed or token is not admin format; continue to try user token
+        pass
+    
+    # Try to decode with main.py's jwt (for database users with is_admin=1)
+    try:
         payload = decode_access_token(token)
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token payload")
-        user = db.query(User).filter(User.id == int(user_id)).first()
+        try:
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=401, detail="Invalid user id in token")
+        
+        user = db.query(User).filter(User.id == uid).first()
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         if not user.is_admin:
@@ -370,8 +379,8 @@ def require_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get
         return user
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 # Routes: Auth
@@ -628,17 +637,21 @@ def admin_upload_journal(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if submission:
             submission.status = "approved"
-            submission.reviewed_by = admin_user.id
+            # Only set reviewed_by if admin_user.id is not 0 (i.e., not the mock admin user)
+            if admin_user.id != 0:
+                submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
     
     # Save journal record
+    # For admin tokens (id=0), set uploaded_by to None; for database admins (id > 0), use their id
+    uploaded_by_id = admin_user.id if admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
         abstract=abstract,
         file_path=dest_path,
         original_filename=file.filename,
-        uploaded_by=admin_user.id,
+        uploaded_by=uploaded_by_id,
         submission_id=submission_id,
     )
     db.add(journal)
