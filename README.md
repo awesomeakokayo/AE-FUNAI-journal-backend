@@ -219,8 +219,8 @@ ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
 # Admin Authentication (required)
-ADMIN_USERNAME=funaijournalaccess
-ADMIN_PASSWORD=EstablishedIn25
+ADMIN_USERNAME=enterusername
+ADMIN_PASSWORD=*******
 ADMIN_PASSWORD_HASH=$2b$12$...  # bcrypt hash of password (optional, fallback to plaintext)
 
 # CORS (optional, default: https://aefunai.netlify.app)
