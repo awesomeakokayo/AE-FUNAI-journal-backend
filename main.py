@@ -1,4 +1,3 @@
-# main.py
 ALLOWED_ORIGINS="https://aefunai.netlify.app"
 
 import os
@@ -23,7 +22,7 @@ from fastapi import (
     Request,
 )
 import re
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import (
@@ -32,7 +31,6 @@ from sqlalchemy import (
     String,
     Text,
     DateTime,
-    LargeBinary,
     create_engine,
     ForeignKey,
 )
@@ -46,13 +44,6 @@ from auth import (
     decode_token as auth_decode_token,
     ADMIN_USERNAME,
 )
-
-import io
-import logging
-
-# Simple logger
-logger = logging.getLogger("journal_app")
-logging.basicConfig(level=logging.INFO)
 
 # FastAPI app
 app = FastAPI(title="Journal Platform API")
@@ -128,15 +119,15 @@ class Submission(Base):
     title = Column(String(255), nullable=False)
     authors = Column(String(255), nullable=False)
     abstract = Column(Text)
-    file_path = Column(String(500), nullable=True)          # lightweight pointer or original name
+    file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
+    category = Column(String(255), index=True, nullable=True)
     submitted_by = Column(Integer, ForeignKey("users.id"))
     submitted_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(50), default="pending")
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
-    file_blob = Column(LargeBinary, nullable=True)          # store uploaded file bytes here
-
+    
     submitter = relationship("User", foreign_keys=[submitted_by], back_populates="submissions")
 
 
@@ -146,12 +137,12 @@ class Journal(Base):
     title = Column(String(255), nullable=False)
     authors = Column(String(255), nullable=False)
     abstract = Column(Text)
-    file_path = Column(String(500), nullable=True)          # lightweight pointer
+    file_path = Column(String(500), nullable=False)
     original_filename = Column(String(255))
+    category = Column(String(255), index=True)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     upload_date = Column(DateTime, default=datetime.utcnow)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=True)
-    file_blob = Column(LargeBinary, nullable=True)          # store published file bytes here
 
     owner = relationship("User", back_populates="journals")
 
@@ -162,18 +153,37 @@ Base.metadata.create_all(bind=engine)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def get_password_hash(password: str):
-    password = safe_password(password)
+def get_password_hash(password: str) -> str:
+    # Bcrypt has a 72-byte limit; truncate if necessary
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+        password = password_bytes.decode('utf-8', errors='ignore')
     return pwd_context.hash(password)
 
 
-def verify_password(plain_password, hashed_password):
-    plain_password = plain_password[:72]  # truncate before verifying
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def safe_password(password: str):
-    return password[:72]
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # Bcrypt has a 72-byte limit; truncate if necessary for verification
+    if not hashed_password:
+        return False
+    
+    # Bcrypt has a 72 byte input limit; reject overly long passwords early
+    try:
+        if isinstance(plain_password, str) and len(plain_password.encode("utf-8")) > 72:
+            # Truncate to 72 bytes for verification
+            password_bytes = plain_password.encode("utf-8")[:72]
+            plain_password = password_bytes.decode('utf-8', errors='ignore')
+    except Exception:
+        pass
+    
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (ValueError, AttributeError, TypeError) as e:
+        print(f"Password verification error: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected password verification error: {e}")
+        return False
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -202,8 +212,8 @@ def send_email_with_attachment(
     """Send email with attachment. Returns True if successful."""
     if not SMTP_USER or not SMTP_PASSWORD:
         # In development, just log instead of sending
-        logger.info(f"[EMAIL] Would send to {to_email}: {subject}")
-        logger.info(f"[EMAIL] Attachment: {attachment_filename}")
+        print(f"[EMAIL] Would send to {to_email}: {subject}")
+        print(f"[EMAIL] Attachment: {attachment_filename}")
         return True  # Return True for development
     
     try:
@@ -214,16 +224,16 @@ def send_email_with_attachment(
         msg.attach(MIMEText(body, 'plain'))
         
         # Attach file
-        if attachment_path and os.path.exists(attachment_path):
-            with open(attachment_path, "rb") as attachment:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header(
-                'Content-Disposition',
-                f'attachment; filename= {attachment_filename}'
-            )
-            msg.attach(part)
+        with open(attachment_path, "rb") as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+        
+        encoders.encode_base64(part)
+        part.add_header(
+            'Content-Disposition',
+            f'attachment; filename= {attachment_filename}'
+        )
+        msg.attach(part)
         
         # Send email
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
@@ -233,7 +243,7 @@ def send_email_with_attachment(
         server.quit()
         return True
     except Exception as e:
-        logger.exception(f"Email sending failed: {e}")
+        print(f"Email sending failed: {e}")
         return False
 
 
@@ -265,6 +275,7 @@ class SubmissionOut(BaseModel):
     authors: str
     abstract: Optional[str]
     original_filename: Optional[str]
+    category: Optional[str]
     submitted_at: datetime
     submitted_by: int
     status: str
@@ -281,8 +292,9 @@ class JournalOut(BaseModel):
     authors: str
     abstract: Optional[str]
     original_filename: Optional[str]
+    category: Optional[str]
     upload_date: datetime
-    uploaded_by: Optional[int]  # allow None for env-admin
+    uploaded_by: Optional[int] 
     class Config:
         orm_mode = True
 
@@ -437,37 +449,28 @@ def submit_journal(
             detail="Only DOC, DOCX, or PDF files are allowed for submission"
         )
     
-    # Read file into bytes (chunked) up to MAX_FILE_SIZE_BYTES
+    # Save submission file
+    file_ext = os.path.splitext(file.filename)[1] or ".doc"
+    unique_name = f"{uuid.uuid4().hex}{file_ext}"
+    dest_path = os.path.join(SUBMISSIONS_DIR, unique_name)
+    
     total = 0
-    data = bytearray()
-    try:
-        while True:
-            chunk = file.file.read(1024 * 1024)
-            if not chunk:
-                break
+    with open(dest_path, "wb") as buffer:
+        for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
             total += len(chunk)
             if total > MAX_FILE_SIZE_BYTES:
+                buffer.close()
+                os.remove(dest_path)
                 raise HTTPException(status_code=400, detail="File too large (max 15MB)")
-            data.extend(chunk)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {e}")
-    finally:
-        try:
-            file.file.close()
-        except Exception:
-            pass
-
-    # Save submission record (store bytes in DB)
-    unique_name = f"{uuid.uuid4().hex}{os.path.splitext(file.filename)[1] or '.doc'}"
+            buffer.write(chunk)
+    
+    # Save submission record
     submission = Submission(
         title=title,
         authors=authors,
         abstract=abstract,
-        file_path=unique_name,            # lightweight pointer
+        file_path=dest_path,
         original_filename=file.filename,
-        file_blob=bytes(data),
         submitted_by=current_user.id,
         status="pending",
     )
@@ -476,14 +479,7 @@ def submit_journal(
     db.refresh(submission)
     
     # Send email to review team
-    temp_path = None
-    try:
-        if SMTP_USER and SMTP_PASSWORD:
-            temp_path = os.path.join(SUBMISSIONS_DIR, unique_name)
-            os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
-            with open(temp_path, "wb") as t:
-                t.write(submission.file_blob)
-        email_body = f"""
+    email_body = f"""
 New Journal Submission Received
 
 Title: {title}
@@ -497,19 +493,14 @@ Abstract:
 Please review this submission and upload it to the site if approved.
 Submission ID: {submission.id}
 """
-        send_email_with_attachment(
-            to_email=REVIEW_EMAIL,
-            subject=f"New Journal Submission: {title}",
-            body=email_body,
-            attachment_path=temp_path or "",
-            attachment_filename=file.filename
-        )
-    finally:
-        try:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
-        except Exception:
-            pass
+    
+    send_email_with_attachment(
+        to_email=REVIEW_EMAIL,
+        subject=f"New Journal Submission: {title}",
+        body=email_body,
+        attachment_path=dest_path,
+        attachment_filename=file.filename
+    )
     
     return {
         "id": submission.id,
@@ -523,7 +514,7 @@ def my_submissions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get current user's submissions.""" 
+    """Get current user's submissions."""
     submissions = db.query(Submission).filter(
         Submission.submitted_by == current_user.id
     ).order_by(Submission.submitted_at.desc()).all()
@@ -592,20 +583,16 @@ def download_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    if not submission.file_blob:
-        raise HTTPException(status_code=404, detail="Submission file not found in database")
+    if not os.path.exists(submission.file_path):
+        raise HTTPException(status_code=404, detail="File not found")
 
-    filename = submission.original_filename or f"submission-{submission_id}.pdf"
+    filename = submission.original_filename or "download"
+    # choose mime
     mime = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
-
-    # Serve bytes from DB
-    return StreamingResponse(
-        io.BytesIO(submission.file_blob),
-        media_type=mime,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(submission.file_blob))
-        }
+    return FileResponse(
+        path=submission.file_path,
+        filename=filename,
+        media_type=mime
     )
 
 
@@ -619,37 +606,28 @@ def admin_upload_journal(
     authors: str = Form(...),
     abstract: Optional[str] = Form(None),
     file: UploadFile = File(...),
+    category: Optional[str] = Form(None),
     submission_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     admin_user: User = Depends(require_admin),
 ):
     """Upload a journal to the public site (admin only)."""
-    # Validate file type
     if file.content_type not in ALLOWED_JOURNAL_TYPES:
         raise HTTPException(status_code=400, detail="Only PDF files are allowed for published journals")
-    
-    # Read upload into bytes
+
+    unique_name = f"{uuid.uuid4().hex}.pdf"
+    dest_path = os.path.join(UPLOAD_DIR, unique_name)
+
     total = 0
-    data = bytearray()
-    try:
-        while True:
-            chunk = file.file.read(1024 * 1024)
-            if not chunk:
-                break
+    with open(dest_path, "wb") as buffer:
+        for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
             total += len(chunk)
             if total > MAX_FILE_SIZE_BYTES:
+                buffer.close()
+                os.remove(dest_path)
                 raise HTTPException(status_code=400, detail="File too large")
-            data.extend(chunk)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read uploaded file: {e}")
-    finally:
-        try:
-            file.file.close()
-        except Exception:
-            pass
-    
+            buffer.write(chunk)
+
     # Update submission status if linked
     if submission_id:
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
@@ -658,23 +636,22 @@ def admin_upload_journal(
             if getattr(admin_user, "id", None) and admin_user.id != 0:
                 submission.reviewed_by = admin_user.id
             submission.reviewed_at = datetime.utcnow()
-    
-    # Save journal record with bytes in DB
+
     uploaded_by_id = admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None
     journal = Journal(
         title=title,
         authors=authors,
         abstract=abstract,
-        file_path=f"{uuid.uuid4().hex}.pdf",
+        file_path=dest_path,
         original_filename=file.filename,
-        file_blob=bytes(data),
+        category=category,
         uploaded_by=uploaded_by_id,
         submission_id=submission_id,
     )
     db.add(journal)
     db.commit()
     db.refresh(journal)
-    
+
     return journal
 
 
@@ -689,22 +666,29 @@ def approve_and_publish_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    if not submission.file_blob:
-        raise HTTPException(status_code=404, detail="Submission file not found in database")
+    if not os.path.exists(submission.file_path):
+        raise HTTPException(status_code=404, detail="Submission file not found on server")
 
-    # Mark submission approved
+    ext = os.path.splitext(submission.original_filename or "")[1] or ".pdf"
+    dest_name = f"{uuid.uuid4().hex}{ext}"
+    dest_path = os.path.join(UPLOAD_DIR, dest_name)
+
+    try:
+        shutil.move(submission.file_path, dest_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move file: {e}")
+
     submission.status = "approved"
     submission.reviewed_by = admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None
     submission.reviewed_at = datetime.utcnow()
 
-    # Create Journal record by copying bytes from submission
     journal = Journal(
         title=submission.title,
         authors=submission.authors,
         abstract=submission.abstract,
-        file_path=f"{uuid.uuid4().hex}{os.path.splitext(submission.original_filename or '')[1] or '.pdf'}",
+        file_path=dest_path,
         original_filename=submission.original_filename,
-        file_blob=submission.file_blob,   # copy bytes into journals table
+        category=category,
         uploaded_by=admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None,
         submission_id=submission.id,
     )
@@ -742,16 +726,12 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
     journal = db.query(Journal).filter(Journal.id == journal_id).first()
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
-    if not journal.file_blob:
-        raise HTTPException(status_code=404, detail="File not found in database")
-    filename = journal.original_filename or f"journal-{journal_id}.pdf"
-    return StreamingResponse(
-        io.BytesIO(journal.file_blob),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(journal.file_blob))
-        }
+    if not os.path.exists(journal.file_path):
+        raise HTTPException(status_code=404, detail="File not found on server")
+    return FileResponse(
+        path=journal.file_path,
+        filename=journal.original_filename,
+        media_type="application/pdf"
     )
 
 
@@ -766,13 +746,10 @@ def delete_journal(
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
     
-    # Attempt to remove local file if it exists, then delete DB row
+    # Delete file
     try:
-        try:
-            if journal.file_path and os.path.exists(journal.file_path):
-                os.remove(journal.file_path)
-        except Exception:
-            pass
+        if os.path.exists(journal.file_path):
+            os.remove(journal.file_path)
     except Exception:
         pass
     
