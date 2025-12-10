@@ -740,30 +740,30 @@ def get_journal(journal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Journal not found")
     return journal
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from config.database import get_db
+from domain import Journal
+import os
 
-@app.get("/journals/{journal_id}/download")
+router = APIRouter()
+
+UPLOAD_DIR = "/app/uploads"
+
+@router.get("/journals/{journal_id}/download")
 def download_journal(journal_id: int, db: Session = Depends(get_db)):
     journal = db.query(Journal).filter(Journal.id == journal_id).first()
-
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    # Use ONLY the original filename
-    safe_name = os.path.basename(journal.original_filename)
-    upload_dir = os.path.join(BASE_DIR, "uploads")
-    file_path = os.path.join(upload_dir, safe_name)
+    original_filename = journal.file
+    file_path = os.path.join(UPLOAD_DIR, original_filename)
 
     if not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"File not found: {file_path}"
-        )
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
-    return FileResponse(
-        file_path,
-        media_type="application/pdf",
-        filename=safe_name
-    )
+    return FileResponse(file_path, filename=original_filename)
 
 
 @app.delete("/admin/journals/{journal_id}")
