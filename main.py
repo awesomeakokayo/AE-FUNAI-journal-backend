@@ -138,6 +138,7 @@ class Journal(Base):
     authors = Column(String(255), nullable=False)
     abstract = Column(Text)
     file_path = Column(String(500), nullable=False)  # stored as basename
+    file_blob = Column(LargeBinary, nullable=True)  # PDF bytes
     original_filename = Column(String(255))
     category = Column(String(255), index=True)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -638,14 +639,16 @@ def admin_upload_journal(
     dest_path = os.path.join(UPLOAD_DIR, unique_name)
 
     total = 0
+    file_bytes = b""
+    for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
+        total += len(chunk)
+        if total > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(status_code=400, detail="File too large")
+        file_bytes += chunk
+
+    # Save to disk (optional, for backup)
     with open(dest_path, "wb") as buffer:
-        for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
-            total += len(chunk)
-            if total > MAX_FILE_SIZE_BYTES:
-                buffer.close()
-                os.remove(dest_path)
-                raise HTTPException(status_code=400, detail="File too large")
-            buffer.write(chunk)
+        buffer.write(file_bytes)
 
     # Update submission status if linked
     if submission_id:
@@ -662,6 +665,7 @@ def admin_upload_journal(
         authors=authors,
         abstract=abstract,
         file_path=unique_name,  # store basename only
+        file_blob=file_bytes,   # store PDF bytes in DB
         original_filename=file.filename,
         category=category,
         uploaded_by=uploaded_by_id,
@@ -747,19 +751,17 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    # Always use the filename only, never trust absolute path from DB
-    filename = os.path.basename(journal.file_path) if journal.file_path else None
-    if not filename or not journal.original_filename:
-        raise HTTPException(status_code=400, detail="Journal file information is incomplete in the database")
+    if not journal.file_blob:
+        raise HTTPException(status_code=404, detail="PDF file not found in database")
 
-    file_path = os.path.join(UPLOAD_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"File not found on server: {file_path}")
-
-    return FileResponse(
-        path=file_path,
-        filename=journal.original_filename,
-        media_type="application/pdf"
+    filename = journal.original_filename or f"journal-{journal_id}.pdf"
+    return StreamingResponse(
+        io.BytesIO(journal.file_blob),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(journal.file_blob))
+        }
     )
 
 
