@@ -1,4 +1,4 @@
-ALLOWED_ORIGINS="https://aefunai.netlify.app"
+ALLOWED_ORIGINS = "https://aefunai.netlify.app"
 
 import os
 import uuid
@@ -60,7 +60,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY")
 ALGORITHM = os.environ.get("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
-ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", "https://aefunai.netlify.app")
+ALLOWED_ORIGINS_ENV = os.environ.get("ALLOWED_ORIGINS", ALLOWED_ORIGINS)
 ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 
 # File size limit
@@ -119,7 +119,7 @@ class Submission(Base):
     title = Column(String(255), nullable=False)
     authors = Column(String(255), nullable=False)
     abstract = Column(Text)
-    file_path = Column(String(500), nullable=False)
+    file_path = Column(String(500), nullable=False)  # stored as basename
     original_filename = Column(String(255))
     category = Column(String(255), index=True, nullable=True)
     submitted_by = Column(Integer, ForeignKey("users.id"))
@@ -137,7 +137,7 @@ class Journal(Base):
     title = Column(String(255), nullable=False)
     authors = Column(String(255), nullable=False)
     abstract = Column(Text)
-    file_path = Column(String(500), nullable=False)
+    file_path = Column(String(500), nullable=False)  # stored as basename
     original_filename = Column(String(255))
     category = Column(String(255), index=True)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -171,7 +171,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         if isinstance(plain_password, str) and len(plain_password.encode("utf-8")) > 72:
             # Truncate to 72 bytes for verification
-            password_bytes = plain_password.encode("utf-8")[:72]
+            password_bytes = plain_password.encode('utf-8')[:72]
             plain_password = password_bytes.decode('utf-8', errors='ignore')
     except Exception:
         pass
@@ -245,6 +245,21 @@ def send_email_with_attachment(
     except Exception as e:
         print(f"Email sending failed: {e}")
         return False
+
+
+# Helpers
+def resolve_upload_path(stored_path: Optional[str], upload_dir: str) -> Optional[str]:
+    """Resolve a stored file_path (which may be an absolute path or a basename)
+    to an absolute path in the filesystem.
+    """
+    if not stored_path:
+        return None
+    # If stored_path is absolute and exists, use it.
+    if os.path.isabs(stored_path) and os.path.exists(stored_path):
+        return stored_path
+    # Otherwise, treat it as a basename under upload_dir
+    candidate = os.path.join(upload_dir, os.path.basename(stored_path))
+    return candidate
 
 
 # Pydantic Schemas
@@ -438,6 +453,7 @@ def submit_journal(
     authors: str = Form(...),
     abstract: Optional[str] = Form(None),
     file: UploadFile = File(...),
+    category: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -449,7 +465,7 @@ def submit_journal(
             detail="Only DOC, DOCX, or PDF files are allowed for submission"
         )
     
-    # Save submission file
+    # Save submission file as basename under SUBMISSIONS_DIR
     file_ext = os.path.splitext(file.filename)[1] or ".doc"
     unique_name = f"{uuid.uuid4().hex}{file_ext}"
     dest_path = os.path.join(SUBMISSIONS_DIR, unique_name)
@@ -463,14 +479,15 @@ def submit_journal(
                 os.remove(dest_path)
                 raise HTTPException(status_code=400, detail="File too large (max 15MB)")
             buffer.write(chunk)
-    
-    # Save submission record
+
+    # Save submission record (store basename only)
     submission = Submission(
         title=title,
         authors=authors,
         abstract=abstract,
-        file_path=dest_path,
+        file_path=unique_name,
         original_filename=file.filename,
+        category=category,
         submitted_by=current_user.id,
         status="pending",
     )
@@ -583,14 +600,13 @@ def download_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    # Reconstruct full path from filename
-    file_path = os.path.join(SUBMISSIONS_DIR, submission.file_path) if not os.path.isabs(submission.file_path) else submission.file_path
-    
-    if not os.path.exists(file_path):
+    # Resolve path robustly
+    file_path = resolve_upload_path(submission.file_path, SUBMISSIONS_DIR)
+    print(f"[DEBUG] Resolved submission path: {file_path}")
+    if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
     filename = submission.original_filename or "download"
-    # choose mime
     mime = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
     return FileResponse(
         path=file_path,
@@ -645,7 +661,7 @@ def admin_upload_journal(
         title=title,
         authors=authors,
         abstract=abstract,
-        file_path=unique_name,
+        file_path=unique_name,  # store basename only
         original_filename=file.filename,
         category=category,
         uploaded_by=uploaded_by_id,
@@ -669,10 +685,9 @@ def approve_and_publish_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    # Reconstruct full path from filename
-    submission_file_path = os.path.join(SUBMISSIONS_DIR, submission.file_path) if not os.path.isabs(submission.file_path) else submission.file_path
-    
-    if not os.path.exists(submission_file_path):
+    # Reconstruct full path from filename stored in DB
+    submission_file_path = resolve_upload_path(submission.file_path, SUBMISSIONS_DIR)
+    if not submission_file_path or not os.path.exists(submission_file_path):
         raise HTTPException(status_code=404, detail="Submission file not found on server")
 
     ext = os.path.splitext(submission.original_filename or "")[1] or ".pdf"
@@ -692,7 +707,7 @@ def approve_and_publish_submission(
         title=submission.title,
         authors=submission.authors,
         abstract=submission.abstract,
-        file_path=dest_name,
+        file_path=dest_name,  # store basename only
         original_filename=submission.original_filename,
         category=category,
         uploaded_by=admin_user.id if getattr(admin_user, "id", None) and admin_user.id != 0 else None,
@@ -735,10 +750,10 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Journal not found")
     
     # Reconstruct full path from filename
-    file_path = os.path.join(UPLOAD_DIR, journal.file_path) if not os.path.isabs(journal.file_path) else journal.file_path
+    file_path = resolve_upload_path(journal.file_path, UPLOAD_DIR)
     print(f"[DEBUG] Journal {journal_id} found: {file_path}")
     
-    if not os.path.exists(file_path):
+    if not file_path or not os.path.exists(file_path):
         print(f"[DEBUG] File not found at path: {file_path}")
         raise HTTPException(status_code=404, detail="File not found on server")
     print(f"[DEBUG] Serving file: {journal.original_filename}")
@@ -762,8 +777,9 @@ def delete_journal(
     
     # Delete file
     try:
-        if os.path.exists(journal.file_path):
-            os.remove(journal.file_path)
+        file_to_delete = resolve_upload_path(journal.file_path, UPLOAD_DIR)
+        if file_to_delete and os.path.exists(file_to_delete):
+            os.remove(file_to_delete)
     except Exception:
         pass
     
