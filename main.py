@@ -749,24 +749,27 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    # Use the EXACT PATH stored in the database
-    file_path = journal.file_path                  # for example: "/app/uploads/funai journal8.pdf"
-    file_name = journal.file                       # for example: "funai journal8.pdf"
+    # Use ACTUAL FIELD NAMES from your DB model
+    file_path = journal.file_path
+    file_name = journal.original_filename
 
-    # Ensure file actually exists
+    if not file_path or not file_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Journal file information is incomplete in the database"
+        )
+
     if not os.path.exists(file_path):
         raise HTTPException(
             status_code=404,
-            detail=f"File not found: {file_path}"
+            detail=f"File not found on server: {file_path}"
         )
 
-    # Return file for download
     return FileResponse(
         path=file_path,
         filename=file_name,
         media_type="application/pdf"
     )
-
 
 
 @app.delete("/admin/journals/{journal_id}")
