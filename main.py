@@ -725,9 +725,13 @@ def download_journal(journal_id: int, db: Session = Depends(get_db)):
     """Download journal PDF (public)."""
     journal = db.query(Journal).filter(Journal.id == journal_id).first()
     if not journal:
+        print(f"[DEBUG] Journal {journal_id} not found in database")
         raise HTTPException(status_code=404, detail="Journal not found")
+    print(f"[DEBUG] Journal {journal_id} found: {journal.file_path}")
     if not os.path.exists(journal.file_path):
+        print(f"[DEBUG] File not found at path: {journal.file_path}")
         raise HTTPException(status_code=404, detail="File not found on server")
+    print(f"[DEBUG] Serving file: {journal.original_filename}")
     return FileResponse(
         path=journal.file_path,
         filename=journal.original_filename,
