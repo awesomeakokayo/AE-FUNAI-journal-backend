@@ -743,24 +743,26 @@ def get_journal(journal_id: int, db: Session = Depends(get_db)):
 
 @app.get("/journals/{journal_id}/download")
 def download_journal(journal_id: int, db: Session = Depends(get_db)):
-    """Download journal PDF (public)."""
     journal = db.query(Journal).filter(Journal.id == journal_id).first()
+
     if not journal:
-        print(f"[DEBUG] Journal {journal_id} not found in database")
         raise HTTPException(status_code=404, detail="Journal not found")
-    
-    # Reconstruct full path from filename
-    file_path = resolve_upload_path(journal.file_path, UPLOAD_DIR)
-    print(f"[DEBUG] Journal {journal_id} found: {file_path}")
-    
-    if not file_path or not os.path.exists(file_path):
-        print(f"[DEBUG] File not found at path: {file_path}")
-        raise HTTPException(status_code=404, detail="File not found on server")
-    print(f"[DEBUG] Serving file: {journal.original_filename}")
+
+    # Use ONLY the original filename
+    safe_name = os.path.basename(journal.original_filename)
+    upload_dir = os.path.join(BASE_DIR, "uploads")
+    file_path = os.path.join(upload_dir, safe_name)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {file_path}"
+        )
+
     return FileResponse(
-        path=file_path,
-        filename=journal.original_filename,
-        media_type="application/pdf"
+        file_path,
+        media_type="application/pdf",
+        filename=safe_name
     )
 
 
