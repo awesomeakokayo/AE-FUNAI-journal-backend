@@ -740,21 +740,33 @@ def get_journal(journal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Journal not found")
     return journal
 
-UPLOAD_DIR = "/app/uploads"
 
-@router.get("/journals/{journal_id}/download")
+@app.get("/journals/{journal_id}/download")
 def download_journal(journal_id: int, db: Session = Depends(get_db)):
+
     journal = db.query(Journal).filter(Journal.id == journal_id).first()
+
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    original_filename = journal.file
-    file_path = os.path.join(UPLOAD_DIR, original_filename)
+    # Use the EXACT PATH stored in the database
+    file_path = journal.file_path                  # for example: "/app/uploads/funai journal8.pdf"
+    file_name = journal.file                       # for example: "funai journal8.pdf"
 
+    # Ensure file actually exists
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {file_path}"
+        )
 
-    return FileResponse(file_path, filename=original_filename)
+    # Return file for download
+    return FileResponse(
+        path=file_path,
+        filename=file_name,
+        media_type="application/pdf"
+    )
+
 
 
 @app.delete("/admin/journals/{journal_id}")
