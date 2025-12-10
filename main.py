@@ -740,15 +740,6 @@ def get_journal(journal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Journal not found")
     return journal
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
-from config.database import get_db
-from domain import Journal
-import os
-
-router = APIRouter()
-
 UPLOAD_DIR = "/app/uploads"
 
 @router.get("/journals/{journal_id}/download")
