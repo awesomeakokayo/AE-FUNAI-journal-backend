@@ -1,4 +1,7 @@
-ALLOWED_ORIGINS = "https://aefunai.netlify.app", "https://aefunaijedu.com"
+ALLOWED_ORIGINS=[
+        "https://aefunaijedu.com",
+        "https://www.aefunaijedu.com",
+    ],
 
 import os
 import uuid
@@ -71,7 +74,10 @@ MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
 # Add CORS middleware AFTER ALLOWED_ORIGINS is defined
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+     allow_origins=[
+        "https://aefunaijedu.com",
+        "https://www.aefunaijedu.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
