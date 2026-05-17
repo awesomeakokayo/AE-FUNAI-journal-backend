@@ -1,4 +1,4 @@
-ALLOWED_ORIGINS = "https://aefunai.netlify.app"
+ALLOWED_ORIGINS = "https://aefunai.netlify.app", "https://aefunaijedu.com"
 
 import os
 import uuid
